@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 from volcengine.bioos.BioOsService import BioOsService
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_cors import CORS
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///test.db'
@@ -16,6 +17,8 @@ db = SQLAlchemy(app)
 #登录令牌
 app.config['JWT_SECRET_KEY'] = os.urandom(24)
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=60*24*30)  # 设置访问令牌的有效期为一个月
+# 允许所有源的跨域请求
+CORS(app)
 jwt = JWTManager(app)
 
 class User(db.Model):
@@ -106,7 +109,14 @@ def login():
         # 检查密码是否正确
     if check_password(user.password, password):
         access_token = create_access_token(identity={'user_id': user.id})  # 注意使用 user.id 而不是 user_id（取决于您的模型定义）
-        return jsonify(access_token=access_token), 200
+        return jsonify(
+            access_token=access_token,
+            success=1,
+            username=user.username,
+            id=user.id,
+            user_ak=user.user_ak,
+            user_sk=user.user_sk
+        ), 200
     else:
         return jsonify({"msg": "Bad credentials"}), 401
 
@@ -156,7 +166,6 @@ def change_password():
 
 # 每次调用接口时先调用这个函数，设置全局参数
 @app.route('/set-ak-sk/<int:id>', methods=['GET'])
-@jwt_auth_required
 def set_ak_sk(id):
     print(f"Request received for ID: {id}")  # 打印请求的 ID
     set_ak_sk_global(id)  # 调用函数设置全局变量
@@ -456,6 +465,75 @@ def get_trs_workflow_info():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# 获取notebook列表
+@app.route('/list_notebook_servers', methods=['GET'])
+@jwt_auth_required
+def list_notebook_servers():
+
+    #从请求中获取分页信息和筛选条件
+    page_number = request.args.get('PageNumber', default=1, type=int)
+    page_size = request.args.get('PageSize', default=10, type=int)
+    workspace_id = request.args.get('WorkspaceID')
+    user_id = request.args.get('UserID', type=int) #解析为整数
+    status = request.args.get('Status', default='["spawn"]')
+    sort_by = request.args.get('SortBy', default='OwnerName')
+    sort_order = request.args.get('SortOrder', default='Desc')
+
+    if not workspace_id:
+        return jsonify({"error": "WorkspaceID is required."}),400
+    try:
+
+        #构建参数
+        params = {
+        "PageNumber": page_number,
+        "PageSize": page_size,
+        "Filter": {
+            "Status": status,
+            "WorkspaceID": workspace_id,
+            "UserID": user_id
+        },
+        "SortBy": sort_by,
+        "SortOrder": sort_order
+        }
+
+        resp = bioos_service.list_notebook_servers(params)
+        return jsonify(resp),200
+    except Exception as e:
+        return jsonify({"error": str(e)}),500
+
+
+# 获取数据列表
+@app.route('/api/list_data_files', methods=['GET'])
+def list_data_files():
+    # 从请求中获取参数
+    dataset_id = request.args.get('DataSetID')
+    page_number = request.args.get('PageNumber', default=1, type=int)
+    page_size = request.args.get('PageSize', default=10, type=int)
+    ids = request.args.getlist('IDs') # 可以传递多个数据文件 ID
+    file_type = request.args.getlist('FileType') # 可以传递多个文件类型
+    keyword = request.args.get('Keyword', default='')
+
+    if not dataset_id:
+        return jsonify({"error": "DataSetID is required."}),400 # 构建参数
+    params = {
+    "DataSetID": dataset_id,
+    "PageNumber": page_number,
+    "PageSize": page_size,
+    "Filter": {
+        "IDs": ids,
+        "FileType": file_type,
+        "Keyword": keyword
+    },
+    "SortBy": "Name",
+    "SortOrder": "Desc"
+    }
+
+    try:
+        # 调用获取数据文件列表的方法
+        resp = bioos_service.list_data_files(params)
+        return jsonify(resp),200
+    except Exception as e:
+        return jsonify({"error": str(e)}),500
 
 # 创建数据模型
 @app.route('/create_data_model', methods=['POST'])
